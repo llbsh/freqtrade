@@ -3,14 +3,10 @@ Various tool function for Freqtrade and scripts
 """
 import gzip
 import logging
-import re
-from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, Iterator, List, Mapping, Union
-from typing.io import IO
+from typing import Any, Dict, Iterator, List, Mapping, Optional, TextIO, Union
 from urllib.parse import urlparse
 
-import orjson
 import pandas as pd
 import rapidjson
 
@@ -49,18 +45,6 @@ def round_coin_value(
     return val
 
 
-def shorten_date(_date: str) -> str:
-    """
-    Trim the date so it fits on small screens
-    """
-    new_date = re.sub('seconds?', 'sec', _date)
-    new_date = re.sub('minutes?', 'min', new_date)
-    new_date = re.sub('hours?', 'h', new_date)
-    new_date = re.sub('days?', 'd', new_date)
-    new_date = re.sub('^an?', '1', new_date)
-    return new_date
-
-
 def file_dump_json(filename: Path, data: Any, is_zip: bool = False, log: bool = True) -> None:
     """
     Dump JSON data into a file
@@ -81,7 +65,7 @@ def file_dump_json(filename: Path, data: Any, is_zip: bool = False, log: bool = 
     else:
         if log:
             logger.info(f'dumping json to "{filename}"')
-        with open(filename, 'w') as fp:
+        with filename.open('w') as fp:
             rapidjson.dump(data, fp, default=str, number_mode=rapidjson.NM_NATIVE)
 
     logger.debug(f'done json to "{filename}"')
@@ -98,12 +82,12 @@ def file_dump_joblib(filename: Path, data: Any, log: bool = True) -> None:
 
     if log:
         logger.info(f'dumping joblib to "{filename}"')
-    with open(filename, 'wb') as fp:
+    with filename.open('wb') as fp:
         joblib.dump(data, fp)
     logger.debug(f'done joblib dump to "{filename}"')
 
 
-def json_load(datafile: IO) -> Any:
+def json_load(datafile: Union[gzip.GzipFile, TextIO]) -> Any:
     """
     load data with rapidjson
     Use this to have a consistent experience,
@@ -112,7 +96,7 @@ def json_load(datafile: IO) -> Any:
     return rapidjson.load(datafile, number_mode=rapidjson.NM_NATIVE)
 
 
-def file_load_json(file):
+def file_load_json(file: Path):
 
     if file.suffix != ".gz":
         gzipfile = file.with_suffix(file.suffix + '.gz')
@@ -125,25 +109,24 @@ def file_load_json(file):
             pairdata = json_load(datafile)
     elif file.is_file():
         logger.debug(f"Loading historical data from file {file}")
-        with open(file) as datafile:
+        with file.open() as datafile:
             pairdata = json_load(datafile)
     else:
         return None
     return pairdata
 
 
+def is_file_in_dir(file: Path, directory: Path) -> bool:
+    """
+    Helper function to check if file is in directory.
+    """
+    return file.is_file() and file.parent.samefile(directory)
+
+
 def pair_to_filename(pair: str) -> str:
     for ch in ['/', ' ', '.', '@', '$', '+', ':']:
         pair = pair.replace(ch, '_')
     return pair
-
-
-def format_ms_time(date: int) -> str:
-    """
-    convert MS date to readable format.
-    : epoch-string in ms
-    """
-    return datetime.fromtimestamp(date / 1000.0).strftime('%Y-%m-%dT%H:%M:%S')
 
 
 def deep_merge_dicts(source, destination, allow_null_overrides: bool = True):
@@ -205,7 +188,7 @@ def safe_value_fallback2(dict1: dictMap, dict2: dictMap, key1: str, key2: str, d
     return default_value
 
 
-def plural(num: float, singular: str, plural: str = None) -> str:
+def plural(num: float, singular: str, plural: Optional[str] = None) -> str:
     return singular if (num == 1 or num == -1) else plural or singular + 's'
 
 
@@ -263,15 +246,7 @@ def dataframe_to_json(dataframe: pd.DataFrame) -> str:
     :param dataframe: A pandas DataFrame
     :returns: A JSON string of the pandas DataFrame
     """
-    # https://github.com/pandas-dev/pandas/issues/24889
-    # https://github.com/pandas-dev/pandas/issues/40443
-    # We need to convert to a dict to avoid mem leak
-    def default(z):
-        if isinstance(z, pd.Timestamp):
-            return z.timestamp() * 1e3
-        raise TypeError
-
-    return str(orjson.dumps(dataframe.to_dict(orient='split'), default=default), 'utf-8')
+    return dataframe.to_json(orient='split')
 
 
 def json_to_dataframe(data: str) -> pd.DataFrame:
@@ -301,3 +276,21 @@ def remove_entry_exit_signals(dataframe: pd.DataFrame):
     dataframe[SignalTagType.EXIT_TAG.value] = None
 
     return dataframe
+
+
+def append_candles_to_dataframe(left: pd.DataFrame, right: pd.DataFrame) -> pd.DataFrame:
+    """
+    Append the `right` dataframe to the `left` dataframe
+
+    :param left: The full dataframe you want appended to
+    :param right: The new dataframe containing the data you want appended
+    :returns: The dataframe with the right data in it
+    """
+    if left.iloc[-1]['date'] != right.iloc[-1]['date']:
+        left = pd.concat([left, right])
+
+    # Only keep the last 1500 candles in memory
+    left = left[-1500:] if len(left) > 1500 else left
+    left.reset_index(drop=True, inplace=True)
+
+    return left

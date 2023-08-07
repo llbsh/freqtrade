@@ -1,7 +1,7 @@
 import logging
 from enum import Enum
 
-from gym import spaces
+from gymnasium import spaces
 
 from freqtrade.freqai.RL.BaseEnvironment import BaseEnvironment, Positions
 
@@ -20,6 +20,9 @@ class Base4ActionRLEnv(BaseEnvironment):
     """
     Base class for a 4 action environment
     """
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self.actions = Actions
 
     def set_action_space(self):
         self.action_space = spaces.Discrete(len(Actions))
@@ -43,22 +46,12 @@ class Base4ActionRLEnv(BaseEnvironment):
             self._done = True
 
         self._update_unrealized_total_profit()
-
         step_reward = self.calculate_reward(action)
         self.total_reward += step_reward
+        self.tensorboard_log(self.actions._member_names_[action], category="actions")
 
         trade_type = None
         if self.is_tradesignal(action):
-            """
-            Action: Neutral, position: Long ->  Close Long
-            Action: Neutral, position: Short -> Close Short
-
-            Action: Long, position: Neutral -> Open Long
-            Action: Long, position: Short -> Close Short and Open Long
-
-            Action: Short, position: Neutral -> Open Short
-            Action: Short, position: Long -> Close Long and Open Short
-            """
 
             if action == Actions.Neutral.value:
                 self._position = Positions.Neutral
@@ -66,16 +59,16 @@ class Base4ActionRLEnv(BaseEnvironment):
                 self._last_trade_tick = None
             elif action == Actions.Long_enter.value:
                 self._position = Positions.Long
-                trade_type = "long"
+                trade_type = "enter_long"
                 self._last_trade_tick = self._current_tick
             elif action == Actions.Short_enter.value:
                 self._position = Positions.Short
-                trade_type = "short"
+                trade_type = "enter_short"
                 self._last_trade_tick = self._current_tick
             elif action == Actions.Exit.value:
                 self._update_total_profit()
                 self._position = Positions.Neutral
-                trade_type = "neutral"
+                trade_type = "exit"
                 self._last_trade_tick = None
             else:
                 print("case not defined")
@@ -83,25 +76,32 @@ class Base4ActionRLEnv(BaseEnvironment):
             if trade_type is not None:
                 self.trade_history.append(
                     {'price': self.current_price(), 'index': self._current_tick,
-                     'type': trade_type})
+                     'type': trade_type, 'profit': self.get_unrealized_profit()})
 
-        if self._total_profit < 1 - self.rl_config.get('max_training_drawdown_pct', 0.8):
+        if (self._total_profit < self.max_drawdown or
+                self._total_unrealized_profit < self.max_drawdown):
             self._done = True
 
         self._position_history.append(self._position)
 
         info = dict(
             tick=self._current_tick,
+            action=action,
             total_reward=self.total_reward,
             total_profit=self._total_profit,
-            position=self._position.value
+            position=self._position.value,
+            trade_duration=self.get_trade_duration(),
+            current_profit_pct=self.get_unrealized_profit()
         )
 
         observation = self._get_observation()
 
+        # user can play with time if they want
+        truncated = False
+
         self._update_history(info)
 
-        return observation, step_reward, self._done, info
+        return observation, step_reward, self._done, truncated, info
 
     def is_tradesignal(self, action: int) -> bool:
         """

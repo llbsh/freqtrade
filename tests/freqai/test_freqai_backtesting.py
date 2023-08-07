@@ -35,8 +35,8 @@ def test_freqai_backtest_start_backtest_list(freqai_conf, mocker, testdatadir, c
     args = get_args(args)
     bt_config = setup_optimize_configuration(args, RunMode.BACKTEST)
     Backtesting(bt_config)
-    assert log_has_re('Using --strategy-list with FreqAI REQUIRES all strategies to have identical '
-                      'populate_any_indicators.', caplog)
+    assert log_has_re('Using --strategy-list with FreqAI REQUIRES all strategies to have identical',
+                      caplog)
     Backtesting.cleanup()
 
 
@@ -65,6 +65,8 @@ def test_freqai_backtest_live_models_model_not_found(freqai_conf, mocker, testda
     mocker.patch('freqtrade.optimize.backtesting.history.load_data')
     mocker.patch('freqtrade.optimize.backtesting.history.get_timerange', return_value=(now, now))
     freqai_conf["timerange"] = ""
+    freqai_conf.get("freqai", {}).update({"backtest_using_historic_predictions": False})
+
     patched_configuration_load_config_file(mocker, freqai_conf)
 
     args = [
@@ -79,7 +81,7 @@ def test_freqai_backtest_live_models_model_not_found(freqai_conf, mocker, testda
     bt_config = setup_optimize_configuration(args, RunMode.BACKTEST)
 
     with pytest.raises(OperationalException,
-                       match=r".* Saved models are required to run backtest .*"):
+                       match=r".* Historic predictions data is required to run backtest .*"):
         Backtesting(bt_config)
 
     Backtesting.cleanup()

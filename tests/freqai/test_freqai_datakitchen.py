@@ -9,10 +9,10 @@ from freqtrade.configuration import TimeRange
 from freqtrade.data.dataprovider import DataProvider
 from freqtrade.exceptions import OperationalException
 from freqtrade.freqai.data_kitchen import FreqaiDataKitchen
-from freqtrade.freqai.utils import get_timerange_backtest_live_models
-from tests.conftest import get_patched_exchange, log_has_re
+from tests.conftest import get_patched_exchange
 from tests.freqai.conftest import (get_patched_data_kitchen, get_patched_freqai_strategy,
-                                   make_data_dictionary, make_unfiltered_dataframe)
+                                   make_unfiltered_dataframe)
+from tests.freqai.test_freqai_interface import is_mac
 
 
 @pytest.mark.parametrize(
@@ -72,68 +72,6 @@ def test_check_if_model_expired(mocker, freqai_conf):
     shutil.rmtree(Path(dk.full_path))
 
 
-def test_use_DBSCAN_to_remove_outliers(mocker, freqai_conf, caplog):
-    freqai = make_data_dictionary(mocker, freqai_conf)
-    # freqai_conf['freqai']['feature_parameters'].update({"outlier_protection_percentage": 1})
-    freqai.dk.use_DBSCAN_to_remove_outliers(predict=False)
-    assert log_has_re(r"DBSCAN found eps of 1\.7\d\.", caplog)
-
-
-def test_compute_distances(mocker, freqai_conf):
-    freqai = make_data_dictionary(mocker, freqai_conf)
-    freqai_conf['freqai']['feature_parameters'].update({"DI_threshold": 1})
-    avg_mean_dist = freqai.dk.compute_distances()
-    assert round(avg_mean_dist, 2) == 1.99
-
-
-def test_use_SVM_to_remove_outliers_and_outlier_protection(mocker, freqai_conf, caplog):
-    freqai = make_data_dictionary(mocker, freqai_conf)
-    freqai_conf['freqai']['feature_parameters'].update({"outlier_protection_percentage": 0.1})
-    freqai.dk.use_SVM_to_remove_outliers(predict=False)
-    assert log_has_re(
-        "SVM detected 7.36%",
-        caplog,
-    )
-
-
-def test_compute_inlier_metric(mocker, freqai_conf, caplog):
-    freqai = make_data_dictionary(mocker, freqai_conf)
-    freqai_conf['freqai']['feature_parameters'].update({"inlier_metric_window": 10})
-    freqai.dk.compute_inlier_metric(set_='train')
-    assert log_has_re(
-        "Inlier metric computed and added to features.",
-        caplog,
-    )
-
-
-def test_add_noise_to_training_features(mocker, freqai_conf):
-    freqai = make_data_dictionary(mocker, freqai_conf)
-    freqai_conf['freqai']['feature_parameters'].update({"noise_standard_deviation": 0.1})
-    freqai.dk.add_noise_to_training_features()
-
-
-def test_remove_beginning_points_from_data_dict(mocker, freqai_conf):
-    freqai = make_data_dictionary(mocker, freqai_conf)
-    freqai.dk.remove_beginning_points_from_data_dict(set_='train')
-
-
-def test_principal_component_analysis(mocker, freqai_conf, caplog):
-    freqai = make_data_dictionary(mocker, freqai_conf)
-    freqai.dk.principal_component_analysis()
-    assert log_has_re(
-        "reduced feature dimension by",
-        caplog,
-    )
-
-
-def test_normalize_data(mocker, freqai_conf):
-    freqai = make_data_dictionary(mocker, freqai_conf)
-    data_dict = freqai.dk.data_dictionary
-    freqai.dk.normalize_data(data_dict)
-    assert any('_max' in entry for entry in freqai.dk.data.keys())
-    assert any('_min' in entry for entry in freqai.dk.data.keys())
-
-
 def test_filter_features(mocker, freqai_conf):
     freqai, unfiltered_dataframe = make_unfiltered_dataframe(mocker, freqai_conf)
     freqai.dk.find_features(unfiltered_dataframe)
@@ -166,71 +104,6 @@ def test_make_train_test_datasets(mocker, freqai_conf):
     assert len(data_dictionary['train_features'].index) == 1916
 
 
-def test_get_pairs_timestamp_validation(mocker, freqai_conf):
-    exchange = get_patched_exchange(mocker, freqai_conf)
-    strategy = get_patched_freqai_strategy(mocker, freqai_conf)
-    strategy.dp = DataProvider(freqai_conf, exchange)
-    strategy.freqai_info = freqai_conf.get("freqai", {})
-    freqai = strategy.freqai
-    freqai.live = True
-    freqai.dk = FreqaiDataKitchen(freqai_conf)
-    freqai_conf['freqai'].update({"identifier": "invalid_id"})
-    model_path = freqai.dk.get_full_models_path(freqai_conf)
-    with pytest.raises(
-            OperationalException,
-            match=r'.*required to run backtest with the freqai-backtest-live-models.*'
-            ):
-        freqai.dk.get_assets_timestamps_training_from_ready_models(model_path)
-
-
-@pytest.mark.parametrize('model', [
-    'LightGBMRegressor'
-    ])
-def test_get_timerange_from_ready_models(mocker, freqai_conf, model):
-    freqai_conf.update({"freqaimodel": model})
-    freqai_conf.update({"timerange": "20180110-20180130"})
-    freqai_conf.update({"strategy": "freqai_test_strat"})
-
-    strategy = get_patched_freqai_strategy(mocker, freqai_conf)
-    exchange = get_patched_exchange(mocker, freqai_conf)
-    strategy.dp = DataProvider(freqai_conf, exchange)
-    strategy.freqai_info = freqai_conf.get("freqai", {})
-    freqai = strategy.freqai
-    freqai.live = True
-    freqai.dk = FreqaiDataKitchen(freqai_conf)
-    timerange = TimeRange.parse_timerange("20180101-20180130")
-    freqai.dd.load_all_pair_histories(timerange, freqai.dk)
-
-    freqai.dd.pair_dict = MagicMock()
-
-    data_load_timerange = TimeRange.parse_timerange("20180101-20180130")
-
-    # 1516233600 (2018-01-18 00:00) - Start Training 1
-    # 1516406400 (2018-01-20 00:00) - End Training 1 (Backtest slice 1)
-    # 1516579200 (2018-01-22 00:00) - End Training 2 (Backtest slice 2)
-    # 1516838400 (2018-01-25 00:00) - End Timerange
-
-    new_timerange = TimeRange("date", "date", 1516233600, 1516406400)
-    freqai.extract_data_and_train_model(
-        new_timerange, "ADA/BTC", strategy, freqai.dk, data_load_timerange)
-
-    new_timerange = TimeRange("date", "date", 1516406400, 1516579200)
-    freqai.extract_data_and_train_model(
-        new_timerange, "ADA/BTC", strategy, freqai.dk, data_load_timerange)
-
-    model_path = freqai.dk.get_full_models_path(freqai_conf)
-    (backtesting_timerange,
-     pairs_end_dates) = freqai.dk.get_timerange_and_assets_end_dates_from_ready_models(
-                        models_path=model_path)
-
-    assert len(pairs_end_dates["ADA"]) == 2
-    assert backtesting_timerange.startts == 1516406400
-    assert backtesting_timerange.stopts == 1516838400
-
-    backtesting_string_timerange = get_timerange_backtest_live_models(freqai_conf)
-    assert backtesting_string_timerange == '20180120-20180125'
-
-
 @pytest.mark.parametrize('model', [
     'LightGBMRegressor'
     ])
@@ -239,6 +112,9 @@ def test_get_full_model_path(mocker, freqai_conf, model):
     freqai_conf.update({"timerange": "20180110-20180130"})
     freqai_conf.update({"strategy": "freqai_test_strat"})
 
+    if is_mac():
+        pytest.skip("Mac is confused during this test for unknown reasons")
+
     strategy = get_patched_freqai_strategy(mocker, freqai_conf)
     exchange = get_patched_exchange(mocker, freqai_conf)
     strategy.dp = DataProvider(freqai_conf, exchange)
@@ -246,6 +122,7 @@ def test_get_full_model_path(mocker, freqai_conf, model):
     freqai = strategy.freqai
     freqai.live = True
     freqai.dk = FreqaiDataKitchen(freqai_conf)
+    freqai.dk.live = True
     timerange = TimeRange.parse_timerange("20180110-20180130")
     freqai.dd.load_all_pair_histories(timerange, freqai.dk)
 
@@ -253,7 +130,7 @@ def test_get_full_model_path(mocker, freqai_conf, model):
 
     data_load_timerange = TimeRange.parse_timerange("20180110-20180130")
     new_timerange = TimeRange.parse_timerange("20180120-20180130")
-
+    freqai.dk.set_paths('ADA/BTC', None)
     freqai.extract_data_and_train_model(
         new_timerange, "ADA/BTC", strategy, freqai.dk, data_load_timerange)
 

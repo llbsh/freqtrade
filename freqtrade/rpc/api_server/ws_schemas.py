@@ -47,7 +47,7 @@ class WSWhitelistRequest(WSRequestSchema):
 
 class WSAnalyzedDFRequest(WSRequestSchema):
     type: RPCRequestType = RPCRequestType.ANALYZED_DF
-    data: Dict[str, Any] = {"limit": 1500}
+    data: Dict[str, Any] = {"limit": 1500, "pair": None}
 
 
 # ------------------------------ MESSAGE SCHEMAS ----------------------------
@@ -65,5 +65,10 @@ class WSAnalyzedDFMessage(WSMessageSchema):
 
     type: RPCMessageType = RPCMessageType.ANALYZED_DF
     data: AnalyzedDFData
+
+
+class WSErrorMessage(WSMessageSchema):
+    type: RPCMessageType = RPCMessageType.EXCEPTION
+    data: str
 
 # --------------------------------------------------------------------------
